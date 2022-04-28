@@ -1,0 +1,28 @@
+[package]
+name = "libp2p-test"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+futures = "0.3.21"
+async-std = { version = "1.11.0", features = ["attributes"] }
+async-trait = "0.1"
+bs58 = "0.4.0"
+clap = { version = "3.1.12", features = ["derive"] }
+log = "0.4"
+env_logger = "0.9.0"
+
+[dependencies.libp2p]
+version = "0.44"
+default-features = false
+features = [
+	"request-response",
+	"tcp-async-io",
+	"noise",
+	"yamux",
+]
+
+[target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies]
+getrandom = { version = "0.2", features = ["js"] }
