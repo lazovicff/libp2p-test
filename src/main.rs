@@ -1,22 +1,14 @@
 use clap::Parser;
-use libp2p::PeerId;
 use env_logger::Builder;
+use libp2p::identity::Keypair;
+use libp2p::{Multiaddr, PeerId};
 use log::LevelFilter;
+use std::str::FromStr;
 
 mod node;
 mod protocol;
 
 use node::{setup_node, start_loop};
-
-pub fn init_logger() {
-    let mut builder = Builder::from_default_env();
-
-    builder
-        .filter(None, LevelFilter::Info)
-        .format_timestamp(None)
-        .init();
-}
-
 
 const BOOTSTRAP_PEERS: [[&str; 2]; 2] = [
     [
@@ -84,22 +76,67 @@ impl Peer {
     }
 }
 
+pub fn init_logger() {
+    let mut builder = Builder::from_default_env();
+
+    builder
+        .filter(None, LevelFilter::Info)
+        .format_timestamp(None)
+        .init();
+}
+
 #[async_std::main]
 async fn main() -> Result<(), EigenError> {
     init_logger();
 
     let args = Args::parse();
 
-    let mut swarm = setup_node(
-        args.key,
-        args.address,
-        DEFAULT_ADDRESS,
-        BOOTSTRAP_PEERS,
-        NUM_NEIGHBOURS,
-    )
-    .await?;
+    // Taking the keypair from the command line or generating a new one.
+    let local_key = if let Some(key) = args.key {
+        let decoded_key = bs58::decode(&key).into_vec().map_err(|e| {
+            log::debug!("bs58::decode {:?}", e);
+            EigenError::InvalidKeypair
+        })?;
+        Keypair::from_protobuf_encoding(&decoded_key).map_err(|e| {
+            log::debug!("Keypair::from_protobuf_encoding {:?}", e);
+            EigenError::InvalidKeypair
+        })?
+    } else {
+        Keypair::generate_ed25519()
+    };
+
+    // Taking the address from the command line arguments or the default one.
+    let local_address = if let Some(addr) = args.address {
+        Multiaddr::from_str(&addr).map_err(|e| {
+            log::debug!("Multiaddr::from_str {:?}", e);
+            EigenError::InvalidAddress
+        })?
+    } else {
+        Multiaddr::from_str(&DEFAULT_ADDRESS).map_err(|e| {
+            log::debug!("Multiaddr::from_str {:?}", e);
+            EigenError::InvalidAddress
+        })?
+    };
+
+    let mut bootstrap_nodes = Vec::new();
+    for info in BOOTSTRAP_PEERS.iter() {
+        // We can also contact the address.
+        let peer_addr = Multiaddr::from_str(info[0]).map_err(|e| {
+            log::debug!("Multiaddr::from_str {:?}", e);
+            EigenError::InvalidAddress
+        })?;
+        let peer_id = PeerId::from_str(info[1]).map_err(|e| {
+            log::debug!("PeerId::from_str {:?}", e);
+            EigenError::InvalidPeerId
+        })?;
+
+        bootstrap_nodes.push((peer_id, peer_addr));
+    }
+
+    let mut swarm = setup_node(local_key, local_address, bootstrap_nodes, NUM_NEIGHBOURS).await?;
 
     let mut peer = Peer::new();
+
     start_loop(&mut peer, &mut swarm).await;
 
     Ok(())

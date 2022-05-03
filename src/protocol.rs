@@ -6,7 +6,7 @@ use std::io::Result;
 
 #[derive(Debug, Clone)]
 pub struct EigenTrustProtocol {
-    version:EigenTrustProtocolVersion,
+    version: EigenTrustProtocolVersion,
 }
 
 impl EigenTrustProtocol {

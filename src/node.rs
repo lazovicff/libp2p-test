@@ -10,7 +10,6 @@ use libp2p::yamux::YamuxConfig;
 use libp2p::{Multiaddr, PeerId, Transport};
 
 use std::iter::once;
-use std::str::FromStr;
 use std::time::Duration;
 
 use futures::prelude::*;
@@ -19,20 +18,18 @@ use crate::protocol::{EigenTrustCodec, EigenTrustProtocol};
 use crate::EigenError;
 use crate::Peer;
 
-async fn basic_transport(
-    keypair: Keypair,
-) -> Result<Boxed<(PeerId, StreamMuxerBox)>, EigenError> {
+async fn basic_transport(keypair: Keypair) -> Result<Boxed<(PeerId, StreamMuxerBox)>, EigenError> {
     let noise_keys = NoiseKeypair::<X25519Spec>::new()
         .into_authentic(&keypair)
         .map_err(|e| {
-			log::error!("NoiseKeypair.into_authentic {}", e);
-			EigenError::InvalidKeypair
-		})?;
+            log::error!("NoiseKeypair.into_authentic {}", e);
+            EigenError::InvalidKeypair
+        })?;
 
     let transport = TcpConfig::new();
 
     Ok(transport
-		.nodelay(true)
+        .nodelay(true)
         .upgrade(Version::V1)
         .authenticate(NoiseConfig::xx(noise_keys).into_authenticated())
         .multiplex(YamuxConfig::default())
@@ -41,39 +38,11 @@ async fn basic_transport(
 }
 
 pub async fn setup_node(
-    key: Option<String>,
-    address: Option<String>,
-    default_address: &str,
-    bootstrap_nodes: [[&str; 2]; 2],
+    local_key: Keypair,
+    local_address: Multiaddr,
+    bootstrap_nodes: Vec<(PeerId, Multiaddr)>,
     max_connections: u32,
 ) -> Result<Swarm<RequestResponse<EigenTrustCodec>>, EigenError> {
-    // Taking the keypair from the command line or generating a new one.
-    let local_key = if let Some(key) = key {
-        let decoded_key = bs58::decode(&key).into_vec().map_err(|e| {
-            log::debug!("bs58::decode {:?}", e);
-            EigenError::InvalidKeypair
-        })?;
-        Keypair::from_protobuf_encoding(&decoded_key).map_err(|e| {
-            log::debug!("Keypair::from_protobuf_encoding {:?}", e);
-            EigenError::InvalidKeypair
-        })?
-    } else {
-        Keypair::generate_ed25519()
-    };
-
-    // Taking the address from the command line arguments or the default one.
-    let local_address = if let Some(addr) = address {
-        Multiaddr::from_str(&addr).map_err(|e| {
-            log::debug!("Multiaddr::from_str {:?}", e);
-            EigenError::InvalidAddress
-        })?
-    } else {
-        Multiaddr::from_str(&default_address).map_err(|e| {
-            log::debug!("Multiaddr::from_str {:?}", e);
-            EigenError::InvalidAddress
-        })?
-    };
-
     // Setting up the request/response protocol.
     let protocols = once((EigenTrustProtocol::new(), ProtocolSupport::Full));
     let cfg = RequestResponseConfig::default();
@@ -93,17 +62,7 @@ pub async fn setup_node(
     })?;
 
     // We want to connect to all bootstrap nodes.
-    for info in bootstrap_nodes.iter() {
-        // We can also contact the address.
-        let peer_addr = Multiaddr::from_str(info[0]).map_err(|e| {
-            log::debug!("Multiaddr::from_str {:?}", e);
-            EigenError::InvalidAddress
-        })?;
-        let peer_id = PeerId::from_str(info[1]).map_err(|e| {
-            log::debug!("PeerId::from_str {:?}", e);
-            EigenError::InvalidPeerId
-        })?;
-
+    for (peer_id, peer_addr) in bootstrap_nodes {
         if peer_id == local_peer_id {
             continue;
         }
@@ -115,10 +74,7 @@ pub async fn setup_node(
     Ok(swarm)
 }
 
-pub async fn start_loop(
-    peer: &mut Peer,
-    swarm: &mut Swarm<RequestResponse<EigenTrustCodec>>,
-) {
+pub async fn start_loop(peer: &mut Peer, swarm: &mut Swarm<RequestResponse<EigenTrustCodec>>) {
     println!("");
     loop {
         match swarm.select_next_some().await {
