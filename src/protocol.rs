@@ -5,25 +5,25 @@ use libp2p::request_response::{ProtocolName, RequestResponseCodec};
 use std::io::Result;
 
 #[derive(Debug, Clone)]
-pub struct NeighbourRequestProtocol {
-    version: NeighbourRequestProtocolVersion,
+pub struct EigenTrustProtocol {
+    version:EigenTrustProtocolVersion,
 }
 
-impl NeighbourRequestProtocol {
+impl EigenTrustProtocol {
     pub fn new() -> Self {
         Self {
-            version: NeighbourRequestProtocolVersion::V1,
+            version: EigenTrustProtocolVersion::V1,
         }
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-enum NeighbourRequestProtocolVersion {
+enum EigenTrustProtocolVersion {
     V1,
 }
 
 #[derive(Clone)]
-pub struct NeighbourRequestCodec;
+pub struct EigenTrustCodec;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Request;
@@ -31,21 +31,20 @@ pub struct Request;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Response {
     Success,
-    MaxNumOfNeighboursReached,
     Other(u8),
 }
 
-impl ProtocolName for NeighbourRequestProtocol {
+impl ProtocolName for EigenTrustProtocol {
     fn protocol_name(&self) -> &[u8] {
         match self.version {
-            NeighbourRequestProtocolVersion::V1 => b"/neighbour_request/1",
+            EigenTrustProtocolVersion::V1 => b"/eigen_trust/1",
         }
     }
 }
 
 #[async_trait]
-impl RequestResponseCodec for NeighbourRequestCodec {
-    type Protocol = NeighbourRequestProtocol;
+impl RequestResponseCodec for EigenTrustCodec {
+    type Protocol = EigenTrustProtocol;
     type Request = Request;
     type Response = Response;
 
@@ -58,7 +57,7 @@ impl RequestResponseCodec for NeighbourRequestCodec {
         T: AsyncRead + Unpin + Send,
     {
         match protocol.version {
-            NeighbourRequestProtocolVersion::V1 => Ok(Request),
+            EigenTrustProtocolVersion::V1 => Ok(Request),
         }
     }
 
@@ -71,11 +70,10 @@ impl RequestResponseCodec for NeighbourRequestCodec {
         T: AsyncRead + Unpin + Send,
     {
         match protocol.version {
-            NeighbourRequestProtocolVersion::V1 => {
+            EigenTrustProtocolVersion::V1 => {
                 let status_bytes = read_length_prefixed(io, 1).await?;
                 let response = match status_bytes[0] {
                     0 => Response::Success,
-                    1 => Response::MaxNumOfNeighboursReached,
                     code => Response::Other(code),
                 };
                 Ok(response)
@@ -93,7 +91,7 @@ impl RequestResponseCodec for NeighbourRequestCodec {
         T: AsyncWrite + Unpin + Send,
     {
         match protocol.version {
-            NeighbourRequestProtocolVersion::V1 => Ok(()),
+            EigenTrustProtocolVersion::V1 => Ok(()),
         }
     }
 
@@ -107,11 +105,10 @@ impl RequestResponseCodec for NeighbourRequestCodec {
         T: AsyncWrite + Unpin + Send,
     {
         match protocol.version {
-            NeighbourRequestProtocolVersion::V1 => {
+            EigenTrustProtocolVersion::V1 => {
                 let mut bytes = Vec::new();
                 match res {
                     Response::Success => bytes.push(0),
-                    Response::MaxNumOfNeighboursReached => bytes.push(1),
                     Response::Other(code) => bytes.push(code),
                 };
                 write_length_prefixed(io, &bytes).await?;

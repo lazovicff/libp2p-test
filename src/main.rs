@@ -1,11 +1,22 @@
 use clap::Parser;
 use libp2p::PeerId;
-use logger::init_logger;
-use node::{setup_node, start_loop};
+use env_logger::Builder;
+use log::LevelFilter;
 
-mod logger;
 mod node;
 mod protocol;
+
+use node::{setup_node, start_loop};
+
+pub fn init_logger() {
+    let mut builder = Builder::from_default_env();
+
+    builder
+        .filter(None, LevelFilter::Info)
+        .format_timestamp(None)
+        .init();
+}
+
 
 const BOOTSTRAP_PEERS: [[&str; 2]; 2] = [
     [

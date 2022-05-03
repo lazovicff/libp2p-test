@@ -15,20 +15,24 @@ use std::time::Duration;
 
 use futures::prelude::*;
 
-use crate::protocol::{NeighbourRequestCodec, NeighbourRequestProtocol};
+use crate::protocol::{EigenTrustCodec, EigenTrustProtocol};
 use crate::EigenError;
 use crate::Peer;
 
-async fn development_transport(
+async fn basic_transport(
     keypair: Keypair,
 ) -> Result<Boxed<(PeerId, StreamMuxerBox)>, EigenError> {
     let noise_keys = NoiseKeypair::<X25519Spec>::new()
         .into_authentic(&keypair)
-        .map_err(|_| EigenError::InvalidKeypair)?;
+        .map_err(|e| {
+			log::error!("NoiseKeypair.into_authentic {}", e);
+			EigenError::InvalidKeypair
+		})?;
 
-    let transport = TcpConfig::new().nodelay(true);
+    let transport = TcpConfig::new();
 
     Ok(transport
+		.nodelay(true)
         .upgrade(Version::V1)
         .authenticate(NoiseConfig::xx(noise_keys).into_authenticated())
         .multiplex(YamuxConfig::default())
@@ -42,7 +46,7 @@ pub async fn setup_node(
     default_address: &str,
     bootstrap_nodes: [[&str; 2]; 2],
     max_connections: u32,
-) -> Result<Swarm<RequestResponse<NeighbourRequestCodec>>, EigenError> {
+) -> Result<Swarm<RequestResponse<EigenTrustCodec>>, EigenError> {
     // Taking the keypair from the command line or generating a new one.
     let local_key = if let Some(key) = key {
         let decoded_key = bs58::decode(&key).into_vec().map_err(|e| {
@@ -71,13 +75,13 @@ pub async fn setup_node(
     };
 
     // Setting up the request/response protocol.
-    let protocols = once((NeighbourRequestProtocol::new(), ProtocolSupport::Full));
+    let protocols = once((EigenTrustProtocol::new(), ProtocolSupport::Full));
     let cfg = RequestResponseConfig::default();
-    let req_proto = RequestResponse::new(NeighbourRequestCodec, protocols.clone(), cfg.clone());
+    let req_proto = RequestResponse::new(EigenTrustCodec, protocols.clone(), cfg.clone());
 
     // Setting up the transport and swarm.
     let local_peer_id = PeerId::from(local_key.public());
-    let transport = development_transport(local_key).await?;
+    let transport = basic_transport(local_key).await?;
     let connection_limits =
         ConnectionLimits::default().with_max_established_per_peer(Some(max_connections));
     let mut swarm = SwarmBuilder::new(transport, req_proto, local_peer_id)
@@ -113,7 +117,7 @@ pub async fn setup_node(
 
 pub async fn start_loop(
     peer: &mut Peer,
-    swarm: &mut Swarm<RequestResponse<NeighbourRequestCodec>>,
+    swarm: &mut Swarm<RequestResponse<EigenTrustCodec>>,
 ) {
     println!("");
     loop {
