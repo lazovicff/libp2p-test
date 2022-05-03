@@ -1,7 +1,7 @@
 use clap::Parser;
+use libp2p::PeerId;
 use logger::init_logger;
 use node::{setup_node, start_loop};
-use std::collections::HashSet;
 
 mod logger;
 mod node;
@@ -19,7 +19,7 @@ const BOOTSTRAP_PEERS: [[&str; 2]; 2] = [
 ];
 
 const DEFAULT_ADDRESS: &str = "/ip4/0.0.0.0/tcp/0";
-const NUM_NEIGHBOURS: usize = 256;
+const NUM_NEIGHBOURS: u32 = 256;
 
 #[derive(Parser, Debug)]
 struct Args {
@@ -35,10 +35,42 @@ pub enum EigenError {
     InvalidAddress,
     InvalidPeerId,
     ListenFailed,
+    DialError,
+    MaxNeighboursReached,
+    NeighbourNotFound,
 }
 
-struct Peer {
-	neighbours: [String; NUM_NEIGHBOURS],
+pub struct Peer {
+    neighbours: [Option<PeerId>; NUM_NEIGHBOURS as usize],
+}
+
+impl Peer {
+    pub fn new() -> Self {
+        Peer {
+            neighbours: [None; NUM_NEIGHBOURS as usize],
+        }
+    }
+
+    pub fn add_neighbour(&mut self, neighbour: PeerId) -> Result<(), EigenError> {
+        let first_available = self.neighbours.iter().position(|n| n.is_none());
+        if let Some(index) = first_available {
+            self.neighbours[index] = Some(neighbour);
+            return Ok(());
+        }
+        Err(EigenError::MaxNeighboursReached)
+    }
+
+    pub fn remove_neighbour(&mut self, neighbour: PeerId) -> Result<(), EigenError> {
+        let index = self
+            .neighbours
+            .iter()
+            .position(|n| n.map(|n| n == neighbour).unwrap_or(false));
+        if let Some(index) = index {
+            self.neighbours[index] = None;
+            return Ok(());
+        }
+        Err(EigenError::NeighbourNotFound)
+    }
 }
 
 #[async_std::main]
@@ -47,8 +79,17 @@ async fn main() -> Result<(), EigenError> {
 
     let args = Args::parse();
 
-    let mut swarm = setup_node(args.key, args.address, DEFAULT_ADDRESS, BOOTSTRAP_PEERS).await?;
-    start_loop(&mut swarm).await;
+    let mut swarm = setup_node(
+        args.key,
+        args.address,
+        DEFAULT_ADDRESS,
+        BOOTSTRAP_PEERS,
+        NUM_NEIGHBOURS,
+    )
+    .await?;
+
+    let mut peer = Peer::new();
+    start_loop(&mut peer, &mut swarm).await;
 
     Ok(())
 }

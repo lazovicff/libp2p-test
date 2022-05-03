@@ -3,11 +3,8 @@ use libp2p::core::transport::Boxed;
 use libp2p::core::upgrade::Version;
 use libp2p::identity::Keypair;
 use libp2p::noise::{Keypair as NoiseKeypair, NoiseConfig, X25519Spec};
-use libp2p::request_response::{
-    ProtocolSupport, RequestResponse, RequestResponseConfig, RequestResponseEvent,
-    RequestResponseMessage,
-};
-use libp2p::swarm::{Swarm, SwarmEvent};
+use libp2p::request_response::{ProtocolSupport, RequestResponse, RequestResponseConfig};
+use libp2p::swarm::{ConnectionLimits, Swarm, SwarmBuilder, SwarmEvent};
 use libp2p::tcp::TcpConfig;
 use libp2p::yamux::YamuxConfig;
 use libp2p::{Multiaddr, PeerId, Transport};
@@ -18,8 +15,9 @@ use std::time::Duration;
 
 use futures::prelude::*;
 
-use crate::protocol::{NeighbourRequestCodec, NeighbourRequestProtocol, Request, Response};
+use crate::protocol::{NeighbourRequestCodec, NeighbourRequestProtocol};
 use crate::EigenError;
+use crate::Peer;
 
 async fn development_transport(
     keypair: Keypair,
@@ -43,6 +41,7 @@ pub async fn setup_node(
     address: Option<String>,
     default_address: &str,
     bootstrap_nodes: [[&str; 2]; 2],
+    max_connections: u32,
 ) -> Result<Swarm<RequestResponse<NeighbourRequestCodec>>, EigenError> {
     // Taking the keypair from the command line or generating a new one.
     let local_key = if let Some(key) = key {
@@ -79,7 +78,11 @@ pub async fn setup_node(
     // Setting up the transport and swarm.
     let local_peer_id = PeerId::from(local_key.public());
     let transport = development_transport(local_key).await?;
-    let mut swarm = Swarm::new(transport, req_proto, local_peer_id);
+    let connection_limits =
+        ConnectionLimits::default().with_max_established_per_peer(Some(max_connections));
+    let mut swarm = SwarmBuilder::new(transport, req_proto, local_peer_id)
+        .connection_limits(connection_limits)
+        .build();
     swarm.listen_on(local_address).map_err(|e| {
         log::debug!("swarm.listen_on {:?}", e);
         EigenError::ListenFailed
@@ -87,7 +90,8 @@ pub async fn setup_node(
 
     // We want to connect to all bootstrap nodes.
     for info in bootstrap_nodes.iter() {
-        let addr = Multiaddr::from_str(info[0]).map_err(|e| {
+        // We can also contact the address.
+        let peer_addr = Multiaddr::from_str(info[0]).map_err(|e| {
             log::debug!("Multiaddr::from_str {:?}", e);
             EigenError::InvalidAddress
         })?;
@@ -100,123 +104,42 @@ pub async fn setup_node(
             continue;
         }
 
-        swarm.behaviour_mut().add_address(&peer_id, addr.clone());
-        swarm.behaviour_mut().send_request(&peer_id, Request);
+        let res = swarm.dial(peer_addr).map_err(|_| EigenError::DialError);
+        log::debug!("swarm.dial {:?}", res);
     }
 
     Ok(swarm)
 }
 
-fn handle_request_response_event(
-    req_res: &mut RequestResponse<NeighbourRequestCodec>,
-    event: RequestResponseEvent<Request, Response>,
+pub async fn start_loop(
+    peer: &mut Peer,
+    swarm: &mut Swarm<RequestResponse<NeighbourRequestCodec>>,
 ) {
-    match event {
-        RequestResponseEvent::Message {
-            peer,
-            message: RequestResponseMessage::Request { channel, .. },
-        } => {
-            log::info!("Received request from {:?}", peer);
-            req_res.send_response(channel, Response::Success);
-        }
-		RequestResponseEvent::Message {
-			peer,
-			message: RequestResponseMessage::Response { response, .. },
-		} => {
-			log::info!("Received response from {:?}", peer);
-			if let Response::Success = response {
-				log::info!("Successfully connected to {:?}", peer);
-			}
-			log::info!("Response: {:?}", response);
-		}
-        RequestResponseEvent::InboundFailure {
-            peer,
-            request_id,
-            error,
-        } => {
-            log::info!(
-                "Failed to handle request ({:?}) from {:?}: {:?}",
-                request_id,
-                peer,
-                error
-            );
-        }
-        RequestResponseEvent::OutboundFailure {
-            peer,
-            request_id,
-            error,
-        } => {
-            log::info!(
-                "Failed to send request ({:?}) to {:?}: {:?}",
-                request_id,
-                peer,
-                error
-            );
-        }
-        RequestResponseEvent::ResponseSent { peer, request_id } => {
-            log::info!("Sent response to {:?} ({:?})", peer, request_id);
-        }
-    }
-}
-
-pub async fn start_loop(swarm: &mut Swarm<RequestResponse<NeighbourRequestCodec>>) {
     println!("");
     loop {
         match swarm.select_next_some().await {
             SwarmEvent::NewListenAddr { address, .. } => log::info!("Listening on {:?}", address),
             SwarmEvent::Behaviour(event) => {
-                handle_request_response_event(swarm.behaviour_mut(), event)
+                log::debug!("ReqRes event {:?}", event);
             }
             SwarmEvent::ConnectionEstablished { peer_id, .. } => {
+                let res = peer.add_neighbour(peer_id);
+                if let Err(e) = res {
+                    log::error!("Failed to add neighbour {:?}", e);
+                }
                 log::info!("Connection established with {:?}", peer_id);
             }
             SwarmEvent::ConnectionClosed { peer_id, cause, .. } => {
+                let res = peer.remove_neighbour(peer_id);
+                if let Err(e) = res {
+                    log::error!("Failed to remove neighbour {:?}", e);
+                }
                 log::info!("Connection closed with {:?} ({:?})", peer_id, cause);
-            }
-            SwarmEvent::IncomingConnection { send_back_addr, .. } => {
-                log::debug!("Incoming connection to {:?}", send_back_addr);
-            }
-            SwarmEvent::IncomingConnectionError {
-                send_back_addr,
-                error,
-                ..
-            } => {
-                log::debug!(
-                    "Incoming connection error to {:?} ({:?})",
-                    send_back_addr,
-                    error
-                );
-            }
-            SwarmEvent::OutgoingConnectionError { peer_id, error } => {
-                log::debug!("Outgoing connection error with {:?} ({:?})", peer_id, error);
-            }
-            SwarmEvent::BannedPeer { peer_id, endpoint } => {
-                log::debug!("Banned peer {:?} ({:?})", peer_id, endpoint);
-            }
-            SwarmEvent::ExpiredListenAddr {
-                listener_id,
-                address,
-            } => {
-                log::debug!("Expired listen addr {:?} ({:?})", listener_id, address);
-            }
-            SwarmEvent::ListenerClosed {
-                listener_id,
-                addresses,
-                reason,
-            } => {
-                log::info!(
-                    "Listener closed {:?} ({:?}) ({:?})",
-                    listener_id,
-                    addresses,
-                    reason
-                );
-            }
-            SwarmEvent::ListenerError { listener_id, error } => {
-                log::info!("Listener error {:?} ({:?})", listener_id, error);
             }
             SwarmEvent::Dialing(peer_id) => {
                 log::info!("Dialing {:?}", peer_id);
             }
+            e => log::debug!("{:?}", e),
         }
     }
 }
